@@ -161,6 +161,10 @@ LOCAL_CFLAGS += -DCAMCORDER_GRALLOC_SOURCE
 endif
 endif
 
+ifeq ($(TARGET_OMX_LEGACY_RESCALING),true)
+LOCAL_CFLAGS += -DUSE_LEGACY_RESCALING
+endif
+
 LOCAL_CFLAGS += -Wno-multichar -Werror -Wno-error=deprecated-declarations -Wall
 
 LOCAL_C_INCLUDES += hardware/qcom/media/mm-core/inc
