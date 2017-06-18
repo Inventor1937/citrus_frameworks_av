@@ -32,8 +32,6 @@
 #include <media/stagefright/MediaSource.h>
 #include <media/stagefright/MediaBuffer.h>
 
-#include <system/audio.h>
-
 namespace android {
 
 class FLACParser;
@@ -74,8 +72,6 @@ private:
 
 class FLACParser : public RefBase {
 
-friend class FLACSource;
-
 public:
     enum {
         kMaxChannels = 8,
@@ -111,8 +107,6 @@ public:
     // media buffers
     void allocateBuffers();
     void releaseBuffers();
-    void copyBuffer(short *dst, const int *const *src, unsigned nSamples);
-
     MediaBuffer *readBuffer() {
         return readBuffer(false, 0LL);
     }
@@ -122,7 +116,6 @@ public:
 
 protected:
     virtual ~FLACParser();
-
 
 private:
     sp<DataSource> mDataSource;
@@ -480,8 +473,6 @@ static void copyMultiCh24(short *dst, const int * src[FLACParser::kMaxChannels],
         for (unsigned c = 0; c < nChannels; ++c) {
             *dst++ = src[c][i] >> 8;
         }
-        default:
-            TRESPASS();
     }
 }
 
@@ -505,6 +496,7 @@ FLACParser::FLACParser(
       mInitCheck(false),
       mMaxBufferSize(0),
       mGroup(NULL),
+      mCopy(copyTrespass),
       mDecoder(NULL),
       mCurrentPos(0LL),
       mEOF(false),
@@ -582,8 +574,6 @@ status_t FLACParser::init()
         }
         // check sample rate
         switch (getSampleRate()) {
-        case   100:
-        case  1000:
         case  8000:
         case 11025:
         case 12000:
@@ -591,13 +581,10 @@ status_t FLACParser::init()
         case 22050:
         case 24000:
         case 32000:
-        case 42000:
         case 44100:
-        case 46000:
         case 48000:
         case 88200:
         case 96000:
-        case 192000:
             break;
         default:
             ALOGE("unsupported sample rate %u", getSampleRate());
@@ -635,7 +622,6 @@ status_t FLACParser::init()
             // sample rate is non-zero, so division by zero not possible
             mTrackMetadata->setInt64(kKeyDuration,
                     (getTotalSamples() * 1000000LL) / getSampleRate());
-            mTrackMetadata->setInt32(kKeyPcmEncoding, bitsToAudioEncoding(getBitsPerSample()));
         }
     } else {
         ALOGE("missing STREAMINFO");
@@ -651,9 +637,7 @@ void FLACParser::allocateBuffers()
 {
     CHECK(mGroup == NULL);
     mGroup = new MediaBufferGroup;
-    // allocate enough to hold 24-bits (packed in 32 bits)
-    unsigned int bytesPerSample = getBitsPerSample() > 16 ? 4 : 2;
-    mMaxBufferSize = getMaxBlockSize() * getChannels() * bytesPerSample;
+    mMaxBufferSize = getMaxBlockSize() * getChannels() * sizeof(short);
     mGroup->add_buffer(new MediaBuffer(mMaxBufferSize));
 }
 
@@ -706,12 +690,12 @@ MediaBuffer *FLACParser::readBuffer(bool doSeek, FLAC__uint64 sample)
     if (err != OK) {
         return NULL;
     }
-    size_t bufferSize = blocksize * getChannels() * (getBitsPerSample() > 16 ? 4 : 2);
+    size_t bufferSize = blocksize * getChannels() * sizeof(short);
     CHECK(bufferSize <= mMaxBufferSize);
     short *data = (short *) buffer->data();
     buffer->set_range(0, bufferSize);
     // copy PCM from FLAC write buffer to our media buffer, with interleaving
-    copyBuffer(data, (const FLAC__int32 * const *)(&mWriteBuffer), blocksize);
+    (*mCopy)(data, mWriteBuffer, blocksize, getChannels());
     // fill in buffer metadata
     CHECK(mWriteHeader.number_type == FLAC__FRAME_NUMBER_TYPE_SAMPLE_NUMBER);
     FLAC__uint64 sampleNumber = mWriteHeader.number.sample_number;
@@ -746,10 +730,9 @@ FLACSource::~FLACSource()
 
 status_t FLACSource::start(MetaData * /* params */)
 {
-    CHECK(!mStarted);
-
     ALOGV("FLACSource::start");
 
+    CHECK(!mStarted);
     mParser->allocateBuffers();
     mStarted = true;
 
